@@ -12,6 +12,7 @@
   "dependencies": {
     "@chat-adapter/slack": "latest",
     "@chat-adapter/state-pg": "latest",
+    "@namespacelabs/sdk": "^1.5.1",
     "chat": "latest",
     "next": "^16.2.3",
     "react": "^19.2.5",

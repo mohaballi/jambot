@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
     "@chat-adapter/state-pg",
     "chat",
   ],
+  serverExternalPackages: ["ssh2", "@namespacelabs/sdk"],
 };
 
 export default nextConfig;
