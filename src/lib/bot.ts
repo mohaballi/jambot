@@ -2,18 +2,22 @@ import { createSlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
 import { Chat, type Thread } from "chat";
 
-import { createDevboxClient, type DevboxExecution } from "@namespacelabs/sdk/devbox";
+import { createDevboxClient, type Devbox } from "@namespacelabs/sdk/devbox";
 
 import {
   APP_PORT,
   DEVBOX_NAME,
   OPENCODE_PORT,
   appSessionCommand,
+  createOpencodeSession,
   ensureExposedPort,
   ensureRunning,
   ensureSession,
   opencodeSessionCommand,
-  promptOpencode,
+  opencodeSessionStatus,
+  opencodeSessionUrl,
+  pendingOpencodePermission,
+  promptOpencodeSession,
   workspaceDir,
 } from "./jambox";
 
@@ -33,7 +37,7 @@ bot.onNewMention(async (thread, message) => {
 bot.onSubscribedMessage(async (thread, message) => {
   await thread.post(`🚀 Spinning up a jambox...`);
 
-  const prompt = message.text;
+  const prompt = message.text.trim();
   const client = createDevboxClient();
 
   try {
@@ -59,7 +63,13 @@ bot.onSubscribedMessage(async (thread, message) => {
       ensureExposedPort(devbox, OPENCODE_PORT, "opencode"),
     ]);
 
-    const run = prompt.trim() ? await promptOpencode(devbox, workspace, prompt) : undefined;
+    const sessionId = prompt ? await createOpencodeSession(devbox, workspace, title(prompt)) : undefined;
+
+    if (sessionId) {
+      await promptOpencodeSession(devbox, workspace, sessionId, prompt);
+    }
+
+    const sessionUrl = sessionId ? opencodeSessionUrl(opencodeUrl, workspace, sessionId) : undefined;
 
     await thread.post(
       [
@@ -67,13 +77,13 @@ bot.onSubscribedMessage(async (thread, message) => {
           ? `🟢 jambox is ready`
           : `⚠️ jambox sessions are still starting`,
         `App: ${appUrl}${appReady ? "" : " (starting)"}`,
-        `opencode: ${opencodeUrl}${opencodeReady ? "" : " (starting)"}`,
-        run ? `Prompted opencode with: ${quote(prompt)}` : `No prompt to send.`,
+        sessionUrl ? `opencode: ${sessionUrl}` : `opencode: ${opencodeUrl}${opencodeReady ? "" : " (starting)"}`,
+        sessionId ? `Prompted opencode with: ${quote(prompt)}` : `No prompt to send.`,
       ].join("\n"),
     );
 
-    if (run) {
-      await reportPromptFailure(thread, run);
+    if (sessionId) {
+      await watchOpencode(devbox, workspace, sessionId, thread);
     }
   } catch (error: any) {
     console.error(error);
@@ -83,20 +93,43 @@ bot.onSubscribedMessage(async (thread, message) => {
   }
 });
 
+function title(prompt: string): string {
+  const trimmed = prompt.replace(/\s+/g, " ");
+  return trimmed.length > 60 ? `${trimmed.slice(0, 60)}...` : trimmed;
+}
+
 function quote(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, " ");
   const short = trimmed.length > 300 ? `${trimmed.slice(0, 300)}...` : trimmed;
   return `"${short}"`;
 }
 
-async function reportPromptFailure(thread: Thread, run: DevboxExecution) {
-  try {
-    const result = await run.wait({ timeoutMs: 15_000 });
-    if (result.exitCode === 0) return;
-    const tail = (result.stderr || result.stdout).trim().split("\n").slice(-10).join("\n");
-    const detail = [result.error, tail].filter(Boolean).join("\n");
-    await thread.post(`❌ opencode prompt failed:\n${detail || `exit code ${result.exitCode}`}`);
-  } catch {
-    return;
+/**
+ * opencode runs the prompt in the background, so check back briefly for the
+ * states worth surfacing in Slack: a permission prompt, a hard failure, or a
+ * turn that never started (bad model or missing credentials).
+ */
+async function watchOpencode(devbox: Devbox, workspace: string, sessionId: string, thread: Thread) {
+  for (const delayMs of [10_000, 15_000]) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    try {
+      const permission = await pendingOpencodePermission(devbox, workspace, sessionId);
+      if (permission) {
+        await thread.post(`🔐 opencode needs your approval in the web UI: ${permission}`);
+        return;
+      }
+
+      const status = await opencodeSessionStatus(devbox, workspace, sessionId);
+      if (status.error) {
+        await thread.post(`❌ opencode failed: ${status.error}`);
+        return;
+      }
+      if (status.replied) return;
+    } catch {
+      return;
+    }
   }
+
+  await thread.post(`⏳ opencode hasn't replied yet — open the session above to see what's going on.`);
 }

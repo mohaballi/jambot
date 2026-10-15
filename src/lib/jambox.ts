@@ -78,25 +78,133 @@ export async function ensureExposedPort(devbox: Devbox, port: number, name: stri
   return created.url;
 }
 
-export async function promptOpencode(devbox: Devbox, workspace: string, prompt: string) {
-  const lookup = await devbox.exec(
-    [
-      "bash",
-      "-lc",
-      'command -v opencode || { test -x "$HOME/.opencode/bin/opencode" && printf %s "$HOME/.opencode/bin/opencode"; }',
-    ],
-    { cwd: workspace },
-  );
-  const binary = lookup.stdout.trim();
+function opencodeBase(): string {
+  return `http://127.0.0.1:${OPENCODE_PORT}`;
+}
 
-  if (lookup.exitCode !== 0 || !binary) {
-    throw new Error("opencode is not installed on the devbox");
+interface OpencodeResponse {
+  status: number;
+  body: string;
+}
+
+/**
+ * Talks to the opencode server over its HTTP API. The server only listens on
+ * the devbox loopback, so requests run there via exec with an argv array (no
+ * shell, so prompts need no escaping).
+ */
+async function opencodeRequest(
+  devbox: Devbox,
+  workspace: string,
+  method: string,
+  path: string,
+  payload?: unknown,
+): Promise<OpencodeResponse> {
+  const argv = ["curl", "-s", "-S", "-X", method, "-H", "content-type: application/json", "-w", "\n%{http_code}"];
+  if (payload !== undefined) argv.push("--data", JSON.stringify(payload));
+  argv.push(`${opencodeBase()}${path}`);
+
+  const result = await devbox.exec(argv, { cwd: workspace, timeoutMs: 30_000 });
+  if (result.exitCode !== 0) {
+    throw new Error(`opencode request failed: ${result.error ?? (result.stderr.trim() || "unknown error")}`);
   }
 
-  return devbox.executions.start(
-    [binary, "run", "--attach", `http://127.0.0.1:${OPENCODE_PORT}`, "--dir", workspace, prompt],
-    { cwd: workspace, timeoutMs: 30_000 },
+  const split = result.stdout.lastIndexOf("\n");
+  return {
+    status: Number(result.stdout.slice(split + 1).trim()),
+    body: result.stdout.slice(0, split),
+  };
+}
+
+export async function createOpencodeSession(
+  devbox: Devbox,
+  workspace: string,
+  title: string,
+): Promise<string> {
+  const { status, body } = await opencodeRequest(devbox, workspace, "POST", "/session", {
+    title,
+    directory: workspace,
+  });
+  const sessionId = status < 300 ? (JSON.parse(body) as { id?: string }).id : undefined;
+
+  if (!sessionId) {
+    throw new Error(`could not create an opencode session (HTTP ${status}): ${body.trim().slice(0, 200)}`);
+  }
+
+  return sessionId;
+}
+
+/** Fire-and-forget prompt: returns as soon as opencode accepts it. */
+export async function promptOpencodeSession(
+  devbox: Devbox,
+  workspace: string,
+  sessionId: string,
+  prompt: string,
+): Promise<void> {
+  const { status, body } = await opencodeRequest(
+    devbox,
+    workspace,
+    "POST",
+    `/session/${sessionId}/prompt_async`,
+    { parts: [{ type: "text", text: prompt }] },
   );
+
+  if (status >= 300) {
+    throw new Error(`opencode rejected the prompt (HTTP ${status}): ${body.trim().slice(0, 200)}`);
+  }
+}
+
+/** Describes a permission request opencode is blocked on, if any. */
+export async function pendingOpencodePermission(
+  devbox: Devbox,
+  workspace: string,
+  sessionId: string,
+): Promise<string | undefined> {
+  const { body } = await opencodeRequest(devbox, workspace, "GET", "/permission");
+  if (!body.trim()) return undefined;
+
+  const pending = (JSON.parse(body) as {
+    sessionID?: string;
+    permission?: string;
+    patterns?: string[];
+  }[]).find((request) => request.sessionID === sessionId);
+
+  if (!pending) return undefined;
+  return `${pending.permission ?? "action"} ${(pending.patterns ?? []).join(", ")}`.trim();
+}
+
+export interface OpencodeSessionStatus {
+  /** Whether opencode produced an assistant turn at all. */
+  replied: boolean;
+  /** Error reported on the last assistant turn, if any. */
+  error?: string;
+}
+
+export async function opencodeSessionStatus(
+  devbox: Devbox,
+  workspace: string,
+  sessionId: string,
+): Promise<OpencodeSessionStatus> {
+  const { body } = await opencodeRequest(devbox, workspace, "GET", `/session/${sessionId}/message`);
+  const messages = body.trim()
+    ? (JSON.parse(body) as { info?: { role?: string; error?: unknown } }[])
+    : [];
+  const assistant = messages.filter((message) => message.info?.role === "assistant");
+  const failed = assistant.filter((message) => message.info?.error);
+
+  return {
+    replied: assistant.length > 0,
+    error: failed.length ? JSON.stringify(failed[failed.length - 1].info?.error).slice(0, 300) : undefined,
+  };
+}
+
+/**
+ * URL that opens a session in the opencode web UI. The UI addresses sessions by
+ * base64url(directory) rather than the raw path, which would otherwise collide
+ * with the `/session/{id}` JSON API.
+ */
+export function opencodeSessionUrl(baseUrl: string, workspace: string, sessionId: string): string {
+  const slug = Buffer.from(workspace, "utf8").toString("base64url");
+  return `${baseUrl.replace(/\/+$/, "")}/${slug}/session/${sessionId}`;
 }
 
 async function portStatus(devbox: Devbox, port: number): Promise<boolean> {
