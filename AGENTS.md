@@ -14,7 +14,7 @@ npm run start    # Start production server
 
 ```
 src/
-  lib/bot.ts                            # Bot config — adapters, state, handlers
+  lib/bot.tsx                           # Bot config — adapters, state, handlers
   app/api/webhooks/[platform]/route.ts  # Webhook route (all platforms)
 .env.example                            # Required environment variables
 next.config.ts                          # Next.js config (serverExternalPackages if needed)
@@ -24,7 +24,7 @@ next.config.ts                          # Next.js config (serverExternalPackages
 
 1. Each chat platform sends webhooks to `/api/webhooks/{platform}` (e.g. `/api/webhooks/slack`).
 2. The route handler in `route.ts` delegates to the bot's webhook handler for that platform.
-3. The bot is configured in `src/lib/bot.ts` with platform adapters, a state adapter, and message handlers.
+3. The bot is configured in `src/lib/bot.tsx` with platform adapters, a state adapter, and message handlers.
 
 ## Key concepts
 
@@ -37,7 +37,7 @@ next.config.ts                          # Next.js config (serverExternalPackages
   - `onReaction` — reaction added to a message
   - `onSlashCommand` — slash command invoked (Slack, Discord)
 - **Thread** represents a conversation. Use `thread.post()` to send messages, `thread.subscribe()` to listen for follow-ups.
-- **Cards** are rich messages built with JSX (using `jsxImportSource: "chat"` in tsconfig). Import components from `chat/cards`.
+- **Cards** are rich messages built with JSX (using `jsxImportSource: "chat"` in tsconfig — the file must be `.tsx`). Import components from `chat`.
 
 ## Agent resources
 

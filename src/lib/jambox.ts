@@ -45,9 +45,13 @@ export function workspaceDir(devbox: Devbox): string {
   return devbox.info.defaultDir ?? devbox.info.workspaceDir ?? "/workspaces";
 }
 
-/** Brings the workspace to an up-to-date `main` before any work starts. */
+/** Switches the workspace to `main` before any work starts. */
 export async function checkoutMain(devbox: Devbox, workspace: string): Promise<void> {
   await git(devbox, workspace, ["checkout", "main"]);
+}
+
+/** Fast-forwards `main` to the remote before any work starts. */
+export async function pullMain(devbox: Devbox, workspace: string): Promise<void> {
   await git(devbox, workspace, ["pull"]);
 }
 

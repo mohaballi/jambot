@@ -18,6 +18,13 @@ npm run dev
 
 3. Expose your local server to the internet and configure platform webhook URLs.
 
+   For Slack, set **both** request URLs in the app config to the same public endpoint:
+
+   - **Event Subscriptions** → Request URL: `https://<public-host>/api/webhooks/slack`
+   - **Interactivity & Shortcuts** → Request URL: `https://<public-host>/api/webhooks/slack`
+
+   Without the interactivity URL, Slack shows a "not configured to handle interactive responses" warning on messages containing buttons.
+
 ## Endpoints
 
 - Slack: `/api/webhooks/slack`
@@ -26,7 +33,7 @@ npm run dev
 
 ```
 src/
-  lib/bot.ts                              Bot configuration and handlers
+  lib/bot.tsx                             Bot configuration and handlers
   app/api/webhooks/[platform]/route.ts    Webhook endpoint for platform adapters
   app/api/chat/route.ts                   Web adapter endpoint when selected
 .env.example                              Required environment variables

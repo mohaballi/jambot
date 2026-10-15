@@ -1,6 +1,13 @@
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
-import { Chat, inlineCode, link, paragraph, root, text, type Thread } from "chat";
+import {
+  Actions,
+  Card,
+  Chat,
+  LinkButton,
+  Plan,
+  type Thread,
+} from "chat";
 
 import { createDevboxClient, type Devbox } from "@namespacelabs/sdk/devbox";
 
@@ -19,13 +26,13 @@ import {
   opencodeSessionUrl,
   pendingOpencodePermission,
   promptOpencodeSession,
+  pullMain,
   workspaceDir,
 } from "./jambox";
 
 const BOT_USERNAME = process.env.BOT_USERNAME ?? "jambot";
 
 const PROMPT_INSTRUCTIONS = [
-  "Checkout main branch and pull latest changes",
   "Checkout a new branch for the following changes.",
   "Commit the changes once complete.",
 ].join("\n");
@@ -40,16 +47,29 @@ export const bot = new Chat({
 
 bot.onNewMention(async (thread, message) => {
   await thread.subscribe();
-  await thread.post(`You got it, ${message.author.fullName}!`);
 
   const prompt = stripBotMention(message.text);
   const client = createDevboxClient();
 
+  const plan = new Plan({ initialMessage: "Starting devbox" });
+  await thread.post(plan);
+
   try {
     const devbox = await client.devboxes.get(DEVBOX_NAME);
     await ensureRunning(devbox);
+    await plan.updateTask("running");
     const workspace = workspaceDir(devbox);
+
+    await plan.addTask({ title: "Checkout main" });
     await checkoutMain(devbox, workspace);
+    await plan.updateTask("on main");
+
+    await plan.addTask({ title: "Pull latest changes" });
+    await pullMain(devbox, workspace);
+    await plan.updateTask("up to date");
+
+    const appTask = await plan.addTask({ title: "Start app", autoCompletePrevious: false });
+    const opencodeTask = await plan.addTask({ title: "Start opencode", autoCompletePrevious: false });
 
     const [appReady, opencodeReady] = await Promise.all([
       ensureSession(devbox, {
@@ -64,44 +84,51 @@ bot.onNewMention(async (thread, message) => {
       }),
     ]);
 
+    const appOutput = appReady ? "ready" : "still starting";
+    const opencodeOutput = opencodeReady ? "ready" : "still starting";
+
+    if (appTask) {
+      await plan.updateTask({
+        id: appTask.id,
+        status: appReady ? "complete" : "in_progress",
+        output: appOutput,
+      });
+    }
+    if (opencodeTask) {
+      await plan.updateTask({
+        id: opencodeTask.id,
+        status: opencodeReady ? "complete" : "in_progress",
+        output: opencodeOutput,
+      });
+    }
+
     const [appUrl, opencodeUrl] = await Promise.all([
       ensureExposedPort(devbox, APP_PORT, "app"),
       ensureExposedPort(devbox, OPENCODE_PORT, "opencode"),
     ]);
 
-    const sessionId = prompt ? await createOpencodeSession(devbox, workspace, title(prompt)) : undefined;
+    let sessionId: string | undefined;
+    let sessionUrl: string | undefined;
 
-    if (sessionId) {
+    if (prompt) {
+      await plan.addTask({ title: "Prompt opencode" });
+      sessionId = await createOpencodeSession(devbox, workspace, title(prompt));
       await promptOpencodeSession(devbox, workspace, sessionId, `${PROMPT_INSTRUCTIONS}\n\n${prompt}`);
+      sessionUrl = opencodeSessionUrl(opencodeUrl, workspace, sessionId);
+      await plan.updateTask(prompt);
     }
 
-    const sessionUrl = sessionId ? opencodeSessionUrl(opencodeUrl, workspace, sessionId) : undefined;
-
     const ready = appReady && opencodeReady;
-    const starting = (isReady: boolean) => (isReady ? "" : " (starting)");
+    await plan.complete({ completeMessage: ready ? "Devbox is ready" : "Devbox is still starting" });
 
-    await thread.post({
-      ast: root([
-        paragraph([
-          text(`${ready ? "🟢 jambox is ready" : "⚠️ jambox sessions are still starting"}\n`),
-          text("App: "),
-          link(appUrl, [text("open app")]),
-          text(`${starting(appReady)}\n`),
-          text("opencode: "),
-          link(sessionUrl ?? opencodeUrl, [text(sessionUrl ? "open session" : "open opencode")]),
-          text(`${starting(opencodeReady)}\n`),
-          ...(prompt
-            ? [text("Prompted opencode with: "), inlineCode(prompt)]
-            : [text("No prompt to send.")]),
-        ]),
-      ]),
-    });
+    await thread.post(linksCard(appUrl, sessionUrl ?? opencodeUrl));
 
     if (sessionId) {
       await watchOpencode(devbox, workspace, sessionId, thread);
     }
   } catch (error: any) {
     console.error(error);
+    await plan.updateTask({ status: "error", output: error.message });
     await thread.post(`❌ Execution failed: ${error.message}`);
   } finally {
     client.close();
@@ -111,6 +138,18 @@ bot.onNewMention(async (thread, message) => {
 bot.onSubscribedMessage(async (thread, message) => {
   // do nothing
 });
+
+/** Card with link buttons - Slack treats these as pure hyperlinks without interactivity. */
+function linksCard(appUrl: string, opencodeUrl: string) {
+  return (
+    <Card>
+      <Actions>
+        <LinkButton url={appUrl}>🚀  Launch App</LinkButton>
+        <LinkButton url={opencodeUrl}>🤖 Opencode</LinkButton>
+      </Actions>
+    </Card>
+  );
+}
 
 function title(prompt: string): string {
   const trimmed = prompt.replace(/\s+/g, " ");
