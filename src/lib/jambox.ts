@@ -45,6 +45,20 @@ export function workspaceDir(devbox: Devbox): string {
   return devbox.info.defaultDir ?? devbox.info.workspaceDir ?? "/workspaces";
 }
 
+/** Brings the workspace to an up-to-date `main` before any work starts. */
+export async function checkoutMain(devbox: Devbox, workspace: string): Promise<void> {
+  await git(devbox, workspace, ["checkout", "main"]);
+  await git(devbox, workspace, ["pull"]);
+}
+
+async function git(devbox: Devbox, workspace: string, args: string[]): Promise<void> {
+  const result = await devbox.exec(["git", ...args], { cwd: workspace, timeoutMs: 60_000 });
+  if (result.exitCode !== 0) {
+    const detail = result.error ?? (result.stderr.trim() || "unknown error");
+    throw new Error(`git ${args.join(" ")} failed: ${detail}`);
+  }
+}
+
 export function appSessionCommand(workspace: string): string {
   return `bash -lc "cd ${workspace} && exec npm run dev"`;
 }

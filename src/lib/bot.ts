@@ -9,6 +9,7 @@ import {
   DEVBOX_NAME,
   OPENCODE_PORT,
   appSessionCommand,
+  checkoutMain,
   createOpencodeSession,
   ensureExposedPort,
   ensureRunning,
@@ -22,6 +23,12 @@ import {
 } from "./jambox";
 
 const BOT_USERNAME = process.env.BOT_USERNAME ?? "jambot";
+
+const PROMPT_INSTRUCTIONS = [
+  "Checkout main branch and pull latest changes",
+  "Checkout a new branch for the following changes.",
+  "Commit the changes once complete.",
+].join("\n");
 
 export const bot = new Chat({
   userName: BOT_USERNAME,
@@ -42,6 +49,7 @@ bot.onNewMention(async (thread, message) => {
     const devbox = await client.devboxes.get(DEVBOX_NAME);
     await ensureRunning(devbox);
     const workspace = workspaceDir(devbox);
+    await checkoutMain(devbox, workspace);
 
     const [appReady, opencodeReady] = await Promise.all([
       ensureSession(devbox, {
@@ -64,7 +72,7 @@ bot.onNewMention(async (thread, message) => {
     const sessionId = prompt ? await createOpencodeSession(devbox, workspace, title(prompt)) : undefined;
 
     if (sessionId) {
-      await promptOpencodeSession(devbox, workspace, sessionId, prompt);
+      await promptOpencodeSession(devbox, workspace, sessionId, `${PROMPT_INSTRUCTIONS}\n\n${prompt}`);
     }
 
     const sessionUrl = sessionId ? opencodeSessionUrl(opencodeUrl, workspace, sessionId) : undefined;
