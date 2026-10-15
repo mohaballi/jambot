@@ -21,8 +21,10 @@ import {
   workspaceDir,
 } from "./jambox";
 
+const BOT_USERNAME = process.env.BOT_USERNAME ?? "jambot";
+
 export const bot = new Chat({
-  userName: process.env.BOT_USERNAME ?? "jambot",
+  userName: BOT_USERNAME,
   adapters: {
     slack: createSlackAdapter(),
   },
@@ -31,13 +33,9 @@ export const bot = new Chat({
 
 bot.onNewMention(async (thread, message) => {
   await thread.subscribe();
-  await thread.post(`Hi, ${message.author.fullName}! What's up?`);
-});
+  await thread.post(`You got it, ${message.author.fullName}!`);
 
-bot.onSubscribedMessage(async (thread, message) => {
-  await thread.post(`Jammin..`);
-
-  const prompt = message.text.trim();
+  const prompt = stripBotMention(message.text);
   const client = createDevboxClient();
 
   try {
@@ -102,9 +100,27 @@ bot.onSubscribedMessage(async (thread, message) => {
   }
 });
 
+bot.onSubscribedMessage(async (thread, message) => {
+  // do nothing
+});
+
 function title(prompt: string): string {
   const trimmed = prompt.replace(/\s+/g, " ");
   return trimmed.length > 60 ? `${trimmed.slice(0, 60)}...` : trimmed;
+}
+
+/**
+ * The mention handler receives the message text with the bot's own @mention
+ * still in it (`@jambot`, or Slack's `<@U…>` markup when the display name
+ * can't be resolved). Strip it so the prompt is just what the user asked for.
+ */
+function stripBotMention(text: string): string {
+  const escaped = BOT_USERNAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const mention = new RegExp(
+    `(?<!\\w)@${escaped}(?![\\w-])|<@!?[A-Z0-9]+(?:\\|${escaped})?>`,
+    "gi",
+  );
+  return text.replace(mention, "").replace(/[^\S\n]{2,}/g, " ").trim();
 }
 
 /**
