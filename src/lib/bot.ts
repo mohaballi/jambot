@@ -1,6 +1,6 @@
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
-import { Chat, type Thread } from "chat";
+import { Chat, inlineCode, link, paragraph, root, text, type Thread } from "chat";
 
 import { createDevboxClient, type Devbox } from "@namespacelabs/sdk/devbox";
 
@@ -35,7 +35,7 @@ bot.onNewMention(async (thread, message) => {
 });
 
 bot.onSubscribedMessage(async (thread, message) => {
-  await thread.post(`🚀 Spinning up a jambox...`);
+  await thread.post(`Jammin..`);
 
   const prompt = message.text.trim();
   const client = createDevboxClient();
@@ -71,16 +71,25 @@ bot.onSubscribedMessage(async (thread, message) => {
 
     const sessionUrl = sessionId ? opencodeSessionUrl(opencodeUrl, workspace, sessionId) : undefined;
 
-    await thread.post(
-      [
-        appReady && opencodeReady
-          ? `🟢 jambox is ready`
-          : `⚠️ jambox sessions are still starting`,
-        `App: ${appUrl}${appReady ? "" : " (starting)"}`,
-        sessionUrl ? `opencode: ${sessionUrl}` : `opencode: ${opencodeUrl}${opencodeReady ? "" : " (starting)"}`,
-        sessionId ? `Prompted opencode with: ${quote(prompt)}` : `No prompt to send.`,
-      ].join("\n"),
-    );
+    const ready = appReady && opencodeReady;
+    const starting = (isReady: boolean) => (isReady ? "" : " (starting)");
+
+    await thread.post({
+      ast: root([
+        paragraph([
+          text(`${ready ? "🟢 jambox is ready" : "⚠️ jambox sessions are still starting"}\n`),
+          text("App: "),
+          link(appUrl, [text("open app")]),
+          text(`${starting(appReady)}\n`),
+          text("opencode: "),
+          link(sessionUrl ?? opencodeUrl, [text(sessionUrl ? "open session" : "open opencode")]),
+          text(`${starting(opencodeReady)}\n`),
+          ...(prompt
+            ? [text("Prompted opencode with: "), inlineCode(prompt)]
+            : [text("No prompt to send.")]),
+        ]),
+      ]),
+    });
 
     if (sessionId) {
       await watchOpencode(devbox, workspace, sessionId, thread);
@@ -96,12 +105,6 @@ bot.onSubscribedMessage(async (thread, message) => {
 function title(prompt: string): string {
   const trimmed = prompt.replace(/\s+/g, " ");
   return trimmed.length > 60 ? `${trimmed.slice(0, 60)}...` : trimmed;
-}
-
-function quote(text: string): string {
-  const trimmed = text.trim().replace(/\s+/g, " ");
-  const short = trimmed.length > 300 ? `${trimmed.slice(0, 300)}...` : trimmed;
-  return `"${short}"`;
 }
 
 /**
