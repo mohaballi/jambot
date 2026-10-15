@@ -1,8 +1,55 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { Devbox } from "@namespacelabs/sdk/devbox";
 
 export const DEVBOX_NAME = process.env.DEVBOX_NAME ?? "jambox";
 export const APP_PORT = Number(process.env.APP_PORT ?? 3000);
 export const OPENCODE_PORT = Number(process.env.OPENCODE_PORT ?? 4096);
+
+let namespaceAuthConfigured = false;
+
+/**
+ * The Namespace SDK resolves credentials from `NSC_TOKEN_FILE`,
+ * `/var/run/nsc/token.json`, or the local user config — none of which exist on
+ * a serverless host. `NAMESPACE_TOKEN` is written to a token file in the temp
+ * dir and pointed at via `NSC_TOKEN_FILE` so the SDK's default resolution finds
+ * it after every restart. Session tokens (`st_`) are stored as `session_token`
+ * so the SDK can mint fresh bearer tokens; anything else is a `bearer_token`.
+ */
+export function configureNamespaceAuth(): void {
+  if (namespaceAuthConfigured) return;
+  namespaceAuthConfigured = true;
+
+  if (process.env.NSC_TOKEN_FILE) return;
+
+  const token = process.env.NAMESPACE_TOKEN?.trim();
+  if (!token) return;
+
+  const dir = join(tmpdir(), "nsc");
+  const file = join(dir, "token.json");
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify(parseNamespaceToken(token)), { mode: 0o600 });
+    process.env.NSC_TOKEN_FILE = file;
+  } catch (error) {
+    console.error("Failed to write Namespace token file", error);
+  }
+}
+
+function parseNamespaceToken(token: string): Record<string, string> {
+  if (token.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(token);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // Fall through and treat it as a raw token value.
+    }
+  }
+
+  return token.startsWith("st_") ? { session_token: token } : { bearer_token: token };
+}
 
 const POLL_INTERVAL_MS = 2_000;
 const SESSION_START_TIMEOUT_MS = 90_000;

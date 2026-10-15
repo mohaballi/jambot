@@ -17,6 +17,7 @@ import {
   OPENCODE_PORT,
   appSessionCommand,
   checkoutMain,
+  configureNamespaceAuth,
   createOpencodeSession,
   ensureExposedPort,
   ensureRunning,
@@ -36,6 +37,8 @@ const PROMPT_INSTRUCTIONS = [
   "Checkout a new branch for the following changes.",
   "Commit the changes once complete.",
 ].join("\n");
+
+configureNamespaceAuth();
 
 export const bot = new Chat({
   userName: BOT_USERNAME,
