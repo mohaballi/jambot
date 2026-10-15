@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "tunnel": "node ./node_modules/untun/dist/cli.mjs --port 3000",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
@@ -20,6 +21,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "untun": "^0.2.2"
   }
 }
