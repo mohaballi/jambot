@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "tunnel": "node ./node_modules/untun/dist/cli.mjs --port 3000",
+    "dev": "next dev --port 3001",
+    "tunnel": "node ./node_modules/untun/dist/cli.mjs --port 3001",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 3001",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
