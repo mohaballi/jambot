@@ -22,6 +22,7 @@ import {
   ensureExposedPort,
   ensureRunning,
   ensureSession,
+  formatPermissionError,
   opencodeSessionCommand,
   opencodeSessionStatus,
   opencodeSessionUrl,
@@ -131,8 +132,10 @@ bot.onNewMention(async (thread, message) => {
     }
   } catch (error: any) {
     console.error(error);
-    await plan.updateTask({ status: "error", output: error.message });
-    await thread.post(`❌ Execution failed: ${error.message}`);
+    const missing = formatPermissionError(error);
+    const detail = missing ? `${error.message} (missing ${missing})` : error.message;
+    await plan.updateTask({ status: "error", output: detail });
+    await thread.post(`❌ Execution failed: ${detail}`);
   } finally {
     client.close();
   }

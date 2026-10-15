@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Devbox } from "@namespacelabs/sdk/devbox";
+import { PermissionDeniedErrorSchema } from "@namespacelabs/sdk/proto/namespace/cloud/iam/v1beta/authz_pb";
 
 export const DEVBOX_NAME = process.env.DEVBOX_NAME ?? "jambox";
 export const APP_PORT = Number(process.env.APP_PORT ?? 3000);
@@ -49,6 +50,35 @@ function parseNamespaceToken(token: string): Record<string, string> {
   }
 
   return token.startsWith("st_") ? { session_token: token } : { bearer_token: token };
+}
+
+interface MissingPermission {
+  resourceType: string;
+  action: string;
+}
+
+/**
+ * A Namespace RPC denied for lack of grants fails as a Connect error carrying a
+ * `PermissionDeniedError` detail. Pull the missing grants out so the failure
+ * names exactly which permission the token needs.
+ */
+export function formatPermissionError(error: unknown): string | undefined {
+  const findDetails = (error as { findDetails?: (schema: unknown) => unknown })?.findDetails;
+  if (typeof findDetails !== "function") return undefined;
+
+  let found: unknown;
+  try {
+    found = findDetails.call(error, PermissionDeniedErrorSchema);
+  } catch {
+    return undefined;
+  }
+
+  const missing = (found as { missingAccessPermissions?: MissingPermission[] }[])?.flatMap(
+    (detail) => detail.missingAccessPermissions ?? [],
+  );
+  if (!missing?.length) return undefined;
+
+  return [...new Set(missing.map((access) => `${access.resourceType}:${access.action}`))].join(", ");
 }
 
 const POLL_INTERVAL_MS = 2_000;
