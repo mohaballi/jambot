@@ -133,7 +133,9 @@ export async function pullMain(devbox: Devbox, workspace: string): Promise<void>
 }
 
 async function git(devbox: Devbox, workspace: string, args: string[]): Promise<void> {
-  const result = await devbox.exec(["git", ...args], { cwd: workspace, timeoutMs: 60_000 });
+  const result = await withAgentLock(devbox, () =>
+    devbox.exec(["git", ...args], { cwd: workspace, timeoutMs: 60_000 }),
+  );
   if (result.exitCode !== 0) {
     const detail = result.error ?? (result.stderr.trim() || "unknown error");
     throw new Error(`git ${args.join(" ")} failed: ${detail}`);
@@ -152,21 +154,52 @@ export function opencodeSessionCommand(workspace: string): string {
  * The cached agent connection can be dropped by the gateway mid-call (it has no
  * keepalive). The SDK surfaces that as a `ConnectError` with code `Unknown` and
  * Node's `Premature close` message. Invalidate the cached tunnel and retry once.
+ *
+ * This runs under `withAgentLock`: every operation shares one connection per
+ * devbox, and `invalidate` aborts it, so an unguarded retry would cancel a
+ * sibling operation running concurrently and surface as `[canceled] ... aborted`.
  */
 async function withAgentRetry<T>(devbox: Devbox, fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (!isStaleConnectionError(error)) throw error;
-    const handle = devbox as unknown as { connections?: { invalidate(ref: string): void } };
-    handle.connections?.invalidate(devbox.id);
-    return fn();
-  }
+  return withAgentLock(devbox, async () => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isStaleConnectionError(error)) throw error;
+      const handle = devbox as unknown as { connections?: { invalidate(ref: string): void } };
+      handle.connections?.invalidate(devbox.id);
+      return fn();
+    }
+  });
+}
+
+const agentQueues = new Map<string, Promise<void>>();
+
+/**
+ * Serializes agent work per devbox. All SDK operations (exec, sessions, exposed
+ * ports) run over a single cached agent connection, and recovering from a
+ * dropped connection aborts that connection — so concurrent operations must not
+ * overlap or they cancel each other. The queue clears itself when it drains.
+ */
+async function withAgentLock<T>(devbox: Devbox, fn: () => Promise<T>): Promise<T> {
+  const key = devbox.id;
+  const previous = agentQueues.get(key) ?? Promise.resolve();
+  const run = previous.then(() => fn());
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  agentQueues.set(key, tail);
+  void tail.then(() => {
+    if (agentQueues.get(key) === tail) agentQueues.delete(key);
+  });
+  return run;
 }
 
 function isStaleConnectionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /premature close|connection is closed|socket hang up|ECONNRESET/i.test(message);
+  return /premature close|connection is closed|socket hang up|ECONNRESET|operation was aborted/i.test(
+    message,
+  );
 }
 
 export async function ensureSession(
@@ -256,7 +289,9 @@ async function opencodeRequest(
   if (payload !== undefined) argv.push("--data", JSON.stringify(payload));
   argv.push(`${opencodeBase()}${path}`);
 
-  const result = await devbox.exec(argv, { cwd: workspace, timeoutMs: 30_000 });
+  const result = await withAgentLock(devbox, () =>
+    devbox.exec(argv, { cwd: workspace, timeoutMs: 30_000 }),
+  );
   if (result.exitCode !== 0) {
     throw new Error(`opencode request failed: ${result.error ?? (result.stderr.trim() || "unknown error")}`);
   }
