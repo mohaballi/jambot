@@ -30,8 +30,22 @@ npm run dev
 Locally the Namespace SDK reads your `nsc login` token. Serverless hosts have no
 token file, so set `NAMESPACE_TOKEN` to your local session token (the
 `session_token` value in `~/Library/Application Support/ns/token.json` on macOS)
-or to a revokable tenant token created with `nsc token create`. At startup the
-bot writes it to a token file and points the SDK at it via `NSC_TOKEN_FILE`.
+or to a revokable token. At startup the bot writes it to a token file and points
+the SDK at it via `NSC_TOKEN_FILE`.
+
+A revokable token needs `devbox` grants for the API calls and `ingress:access`
+plus `instance:dial_host` for the devbox gateway (used by exec and sessions):
+
+```bash
+nsc token create --name jambot-prod --expires_in 1y \
+  --grant '{"resource_type":"devbox","resource_id":"*","actions":["activate","fetch","list","update"]}' \
+  --grant '{"resource_type":"ingress","resource_id":"*","actions":["access"]}' \
+  --grant '{"resource_type":"instance","resource_id":"*","actions":["dial_host"]}' \
+  --output token
+```
+
+Without the `ingress`/`instance` grants, API calls succeed but exec and terminal
+sessions fail with `devbox gateway returned HTTP 403`.
 
 ## Endpoints
 
