@@ -191,20 +191,44 @@ export async function ensureSession(
 export async function ensureExposedPort(devbox: Devbox, port: number, name: string): Promise<string> {
   return withAgentRetry(devbox, async () => {
     // Reuse a port already exposing this number, whatever it's named.
-    const byNumber = await devbox.exposedPorts.get({ number: port }).catch(() => undefined);
+    const byNumber = await getPortQuietly(devbox, { number: port });
     if (byNumber) return byNumber.url;
 
     // A leftover port can hold this name on a different number, which makes
     // create() fail with a name conflict. Rebind it before creating.
-    const byName = await devbox.exposedPorts.get({ name }).catch(() => undefined);
+    const byName = await getPortQuietly(devbox, { name });
     if (byName) {
       if (byName.number === port) return byName.url;
       await devbox.exposedPorts.delete({ id: byName.id }).catch(() => undefined);
     }
 
-    const created = await devbox.exposedPorts.create({ number: port, name });
-    return created.url;
+    try {
+      const created = await devbox.exposedPorts.create({ number: port, name });
+      return created.url;
+    } catch (error) {
+      // The port already exists — a lookup missed it or a concurrent call won.
+      const raced = await getPortQuietly(devbox, { name });
+      if (raced?.number === port) return raced.url;
+      throw error;
+    }
   });
+}
+
+/**
+ * Like `exposedPorts.get`, but returns undefined only when the port genuinely
+ * isn't there. A dropped agent connection rethrows so `withAgentRetry` can
+ * reconnect, instead of falling through to a create that conflicts.
+ */
+async function getPortQuietly(
+  devbox: Devbox,
+  selector: { number: number } | { name: string },
+): Promise<{ id: string; number: number; url: string } | undefined> {
+  try {
+    return await devbox.exposedPorts.get(selector);
+  } catch (error) {
+    if (error instanceof Error && error.name === "ExposedPortNotFoundError") return undefined;
+    throw error;
+  }
 }
 
 function opencodeBase(): string {
