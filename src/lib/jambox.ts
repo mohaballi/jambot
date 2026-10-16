@@ -148,29 +148,54 @@ export function opencodeSessionCommand(workspace: string): string {
   return `bash -lc "cd ${workspace} && exec opencode serve --port ${OPENCODE_PORT}"`;
 }
 
+/**
+ * The cached agent connection can be dropped by the gateway mid-call (it has no
+ * keepalive). The SDK surfaces that as a `ConnectError` with code `Unknown` and
+ * Node's `Premature close` message. Invalidate the cached tunnel and retry once.
+ */
+async function withAgentRetry<T>(devbox: Devbox, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (!isStaleConnectionError(error)) throw error;
+    const handle = devbox as unknown as { connections?: { invalidate(ref: string): void } };
+    handle.connections?.invalidate(devbox.id);
+    return fn();
+  }
+}
+
+function isStaleConnectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /premature close|connection is closed|socket hang up|ECONNRESET/i.test(message);
+}
+
 export async function ensureSession(
   devbox: Devbox,
   options: { name: string; command: string; port: number },
 ): Promise<boolean> {
-  const sessions = await sessionClient(devbox);
-  const existing = await sessions.listTerminalSessions({});
-  const present = existing.sessions.some((session) => session.name === options.name);
+  return withAgentRetry(devbox, async () => {
+    const sessions = await sessionClient(devbox);
+    const existing = await sessions.listTerminalSessions({});
+    const present = existing.sessions.some((session) => session.name === options.name);
 
-  if (present) {
-    if (await waitForPort(devbox, options.port, EXISTING_SESSION_TIMEOUT_MS)) return true;
-    await sessions.deleteTerminalSession({ name: options.name });
-  }
+    if (present) {
+      if (await waitForPort(devbox, options.port, EXISTING_SESSION_TIMEOUT_MS)) return true;
+      await sessions.deleteTerminalSession({ name: options.name });
+    }
 
-  await sessions.createTerminalSession({ name: options.name, command: options.command });
-  return waitForPort(devbox, options.port, SESSION_START_TIMEOUT_MS);
+    await sessions.createTerminalSession({ name: options.name, command: options.command });
+    return waitForPort(devbox, options.port, SESSION_START_TIMEOUT_MS);
+  });
 }
 
 export async function ensureExposedPort(devbox: Devbox, port: number, name: string): Promise<string> {
-  const existing = await devbox.exposedPorts.get({ number: port }).catch(() => undefined);
-  if (existing?.url) return existing.url;
+  return withAgentRetry(devbox, async () => {
+    const existing = await devbox.exposedPorts.get({ number: port }).catch(() => undefined);
+    if (existing?.url) return existing.url;
 
-  const created = await devbox.exposedPorts.create({ number: port, name });
-  return created.url;
+    const created = await devbox.exposedPorts.create({ number: port, name });
+    return created.url;
+  });
 }
 
 function opencodeBase(): string {

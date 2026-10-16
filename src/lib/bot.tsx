@@ -58,51 +58,54 @@ bot.onNewMention(async (thread, message) => {
   const plan = new Plan({ initialMessage: "Starting devbox" });
   await thread.post(plan);
 
+  // The task a failure should be attributed to; updated as each step starts.
+  let activeTaskId: string | undefined;
+
   try {
     const devbox = await client.devboxes.get(DEVBOX_NAME);
     await ensureRunning(devbox);
     await plan.updateTask("running");
     const workspace = workspaceDir(devbox);
 
-    await plan.addTask({ title: "Checkout main" });
+    activeTaskId = (await plan.addTask({ title: "Checkout main" }))?.id;
     await checkoutMain(devbox, workspace);
     await plan.updateTask("on main");
 
-    await plan.addTask({ title: "Pull latest changes" });
+    activeTaskId = (await plan.addTask({ title: "Pull latest changes" }))?.id;
     await pullMain(devbox, workspace);
     await plan.updateTask("up to date");
 
     const appTask = await plan.addTask({ title: "Start app", autoCompletePrevious: false });
     const opencodeTask = await plan.addTask({ title: "Start opencode", autoCompletePrevious: false });
 
-    const [appReady, opencodeReady] = await Promise.all([
-      ensureSession(devbox, {
+    const [appResult, opencodeResult] = await Promise.all([
+      runSession(devbox, appTask?.id, {
         name: "app",
         command: appSessionCommand(workspace),
         port: APP_PORT,
-      }),
-      ensureSession(devbox, {
+      }, (id) => { activeTaskId = id; }),
+      runSession(devbox, opencodeTask?.id, {
         name: "opencode",
         command: opencodeSessionCommand(workspace),
         port: OPENCODE_PORT,
-      }),
+      }, (id) => { activeTaskId = id; }),
     ]);
 
-    const appOutput = appReady ? "ready" : "still starting";
-    const opencodeOutput = opencodeReady ? "ready" : "still starting";
+    const appReady = appResult.ready;
+    const opencodeReady = opencodeResult.ready;
 
     if (appTask) {
       await plan.updateTask({
         id: appTask.id,
         status: appReady ? "complete" : "in_progress",
-        output: appOutput,
+        output: appReady ? "ready" : "still starting",
       });
     }
     if (opencodeTask) {
       await plan.updateTask({
         id: opencodeTask.id,
         status: opencodeReady ? "complete" : "in_progress",
-        output: opencodeOutput,
+        output: opencodeReady ? "ready" : "still starting",
       });
     }
 
@@ -115,7 +118,7 @@ bot.onNewMention(async (thread, message) => {
     let sessionUrl: string | undefined;
 
     if (prompt) {
-      await plan.addTask({ title: "Prompt opencode" });
+      activeTaskId = (await plan.addTask({ title: "Prompt opencode" }))?.id;
       sessionId = await createOpencodeSession(devbox, workspace, title(prompt));
       await promptOpencodeSession(devbox, workspace, sessionId, `${PROMPT_INSTRUCTIONS}\n\n${prompt}`);
       sessionUrl = opencodeSessionUrl(opencodeUrl, workspace, sessionId);
@@ -134,12 +137,30 @@ bot.onNewMention(async (thread, message) => {
     console.error(error);
     const missing = formatPermissionError(error);
     const detail = missing ? `${error.message} (missing ${missing})` : error.message;
-    await plan.updateTask({ status: "error", output: detail });
+    await plan.updateTask({ id: activeTaskId, status: "error", output: detail });
     await thread.post(`❌ Execution failed: ${detail}`);
   } finally {
     client.close();
   }
 });
+
+/**
+ * Starts one devbox session. If it fails, points the outer handler's error at
+ * this session's task so concurrent starts don't all land on the last task.
+ */
+async function runSession(
+  devbox: Devbox,
+  taskId: string | undefined,
+  options: { name: string; command: string; port: number },
+  onTaskError: (taskId: string | undefined) => void,
+): Promise<{ ready: boolean }> {
+  try {
+    return { ready: await ensureSession(devbox, options) };
+  } catch (error) {
+    onTaskError(taskId);
+    throw error;
+  }
+}
 
 bot.onSubscribedMessage(async (thread, message) => {
   // do nothing
