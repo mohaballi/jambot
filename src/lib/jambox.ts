@@ -190,8 +190,17 @@ export async function ensureSession(
 
 export async function ensureExposedPort(devbox: Devbox, port: number, name: string): Promise<string> {
   return withAgentRetry(devbox, async () => {
-    const existing = await devbox.exposedPorts.get({ number: port }).catch(() => undefined);
-    if (existing?.url) return existing.url;
+    // Reuse a port already exposing this number, whatever it's named.
+    const byNumber = await devbox.exposedPorts.get({ number: port }).catch(() => undefined);
+    if (byNumber) return byNumber.url;
+
+    // A leftover port can hold this name on a different number, which makes
+    // create() fail with a name conflict. Rebind it before creating.
+    const byName = await devbox.exposedPorts.get({ name }).catch(() => undefined);
+    if (byName) {
+      if (byName.number === port) return byName.url;
+      await devbox.exposedPorts.delete({ id: byName.id }).catch(() => undefined);
+    }
 
     const created = await devbox.exposedPorts.create({ number: port, name });
     return created.url;
