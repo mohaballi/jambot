@@ -76,24 +76,13 @@ bot.onNewMention(async (thread, message) => {
     await plan.updateTask("up to date");
 
     const appTask = await plan.addTask({ title: "Start app", autoCompletePrevious: false });
-    const opencodeTask = await plan.addTask({ title: "Start opencode", autoCompletePrevious: false });
-
-    const [appResult, opencodeResult] = await Promise.all([
-      runSession(devbox, appTask?.id, {
+    const appReady = (
+      await runSession(devbox, appTask?.id, {
         name: "app",
         command: appSessionCommand(workspace),
         port: APP_PORT,
-      }, (id) => { activeTaskId = id; }),
-      runSession(devbox, opencodeTask?.id, {
-        name: "opencode",
-        command: opencodeSessionCommand(workspace),
-        port: OPENCODE_PORT,
-      }, (id) => { activeTaskId = id; }),
-    ]);
-
-    const appReady = appResult.ready;
-    const opencodeReady = opencodeResult.ready;
-
+      }, (id) => { activeTaskId = id; })
+    ).ready;
     if (appTask) {
       await plan.updateTask({
         id: appTask.id,
@@ -101,6 +90,15 @@ bot.onNewMention(async (thread, message) => {
         output: appReady ? "ready" : "still starting",
       });
     }
+
+    const opencodeTask = await plan.addTask({ title: "Start opencode", autoCompletePrevious: false });
+    const opencodeReady = (
+      await runSession(devbox, opencodeTask?.id, {
+        name: "opencode",
+        command: opencodeSessionCommand(workspace),
+        port: OPENCODE_PORT,
+      }, (id) => { activeTaskId = id; })
+    ).ready;
     if (opencodeTask) {
       await plan.updateTask({
         id: opencodeTask.id,
@@ -109,10 +107,8 @@ bot.onNewMention(async (thread, message) => {
       });
     }
 
-    const [appUrl, opencodeUrl] = await Promise.all([
-      ensureExposedPort(devbox, APP_PORT, "app"),
-      ensureExposedPort(devbox, OPENCODE_PORT, "opencode"),
-    ]);
+    const appUrl = await ensureExposedPort(devbox, APP_PORT, "app");
+    const opencodeUrl = await ensureExposedPort(devbox, OPENCODE_PORT, "opencode");
 
     let sessionId: string | undefined;
     let sessionUrl: string | undefined;
