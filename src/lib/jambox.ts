@@ -133,7 +133,7 @@ export async function pullMain(devbox: Devbox, workspace: string): Promise<void>
 }
 
 async function git(devbox: Devbox, workspace: string, args: string[]): Promise<void> {
-  const result = await withAgentLock(devbox, () =>
+  const result = await withAgentRetry(devbox, () =>
     devbox.exec(["git", ...args], { cwd: workspace, timeoutMs: 60_000 }),
   );
   if (result.exitCode !== 0) {
@@ -153,23 +153,38 @@ export function opencodeSessionCommand(workspace: string): string {
 /**
  * The cached agent connection can be dropped by the gateway mid-call (it has no
  * keepalive). The SDK surfaces that as a `ConnectError` with code `Unknown` and
- * Node's `Premature close` message. Invalidate the cached tunnel and retry once.
+ * Node's `Premature close` message. Invalidate the cached tunnel and retry.
+ *
+ * A freshly activated devbox can drop the first RPC or two while the agent
+ * comes up, so retry a few times with backoff rather than once.
  *
  * This runs under `withAgentLock`: every operation shares one connection per
  * devbox, and `invalidate` aborts it, so an unguarded retry would cancel a
  * sibling operation running concurrently and surface as `[canceled] ... aborted`.
  */
+const AGENT_RETRY_ATTEMPTS = 3;
+const AGENT_RETRY_BACKOFF_MS = 1_000;
+
 async function withAgentRetry<T>(devbox: Devbox, fn: () => Promise<T>): Promise<T> {
   return withAgentLock(devbox, async () => {
-    try {
-      return await fn();
-    } catch (error) {
-      if (!isStaleConnectionError(error)) throw error;
-      const handle = devbox as unknown as { connections?: { invalidate(ref: string): void } };
-      handle.connections?.invalidate(devbox.id);
-      return fn();
+    let lastError: unknown;
+    for (let attempt = 0; attempt < AGENT_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (!isStaleConnectionError(error)) throw error;
+        lastError = error;
+        const handle = devbox as unknown as { connections?: { invalidate(ref: string): void } };
+        handle.connections?.invalidate(devbox.id);
+        await delay(AGENT_RETRY_BACKOFF_MS * (attempt + 1));
+      }
     }
+    throw lastError;
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const agentQueues = new Map<string, Promise<void>>();
@@ -289,7 +304,7 @@ async function opencodeRequest(
   if (payload !== undefined) argv.push("--data", JSON.stringify(payload));
   argv.push(`${opencodeBase()}${path}`);
 
-  const result = await withAgentLock(devbox, () =>
+  const result = await withAgentRetry(devbox, () =>
     devbox.exec(argv, { cwd: workspace, timeoutMs: 30_000 }),
   );
   if (result.exitCode !== 0) {
