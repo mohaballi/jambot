@@ -36,7 +36,7 @@ const BOT_USERNAME = process.env.BOT_USERNAME ?? "jambot";
 
 const PROMPT_INSTRUCTIONS = [
   "Checkout a new branch for the following changes.",
-  "Commit the changes once complete.",
+  "Commit the changes and open a PR once complete.",
 ].join("\n");
 
 configureNamespaceAuth();
